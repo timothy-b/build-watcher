@@ -28,6 +28,15 @@ async function main() {
   }
 }
 
+function normalizeBuildStatus(status: string): string {
+  const lower = status.toLowerCase();
+  if (lower === "failure" || lower === "failing" || lower === "failed") {
+    return "failure";
+  }
+
+  return lower;
+}
+
 // TODO: notify on context node failures
 // TODO: notify on Bugbot run completion
 // TODO: notify on comment added
@@ -48,6 +57,12 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
                 state # Overall status rollup (e.g., SUCCESS, FAILURE, PENDING)
                 contexts(last: 20) {
                   nodes {
+                    ... on StatusContext {
+                      context    # This is where Buildkite's name lives (e.g., "buildkite/pipeline-name")
+                      state
+                      targetUrl
+                      description
+                    }
                     ... on CheckRun {
                       __typename
                       name
@@ -66,22 +81,29 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
   }`;
 
   for (const pr of prsToWatch) {
-    const response = await fetch(`https://api.github.com/graphql`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        "Content-Type": "application/json",
-        "User-Agent": "Node-Fetch-GraphQL-Script", // GitHub requires a User-Agent header
-      },
-      body: JSON.stringify({
-        query: githubSearchPrChecksQuery,
-        variables: {
-          owner: REPO_OWNER,
-          name: REPO_NAME,
-          prNumber: pr.number,
+    let response: Response;
+    try {
+      response = await fetch(`https://api.github.com/graphql`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          "Content-Type": "application/json",
+          "User-Agent": "Node-Fetch-GraphQL-Script", // GitHub requires a User-Agent header
         },
-      }),
-    });
+        body: JSON.stringify({
+          query: githubSearchPrChecksQuery,
+          variables: {
+            owner: REPO_OWNER,
+            name: REPO_NAME,
+            prNumber: pr.number,
+          },
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to fetch PRs from GitHub", error);
+      return [];
+    }
+
     const checksData = await response.json();
 
     const responseHeaders = response.headers;
@@ -92,9 +114,14 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
 
     const latestStatus =
       checksData.data.repository.pullRequest.commits.nodes[0].commit
-        .statusCheckRollup.state;
+        .statusCheckRollup?.state;
+
+    if (!latestStatus) {
+      continue;
+    }
+
     const lastStatus = lastStatusByBranch.get(pr.headRef);
-    if (latestStatus.toLowerCase() !== lastStatus) {
+    if (normalizeBuildStatus(latestStatus) !== lastStatus) {
       console.log(`latest status for branch ${pr.headRef} is ${latestStatus}`);
       console.log(JSON.stringify(checksData, null, 2));
 
@@ -105,28 +132,49 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
         icon = "💀";
       }
 
+      const firstFailureCheckNode =
+        checksData.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes.find(
+          (context: any) =>
+            ("state" in context &&
+              (context.state.toLowerCase() === "failure" ||
+                context.state.toLowerCase() === "failing")) ||
+            ("status" in context &&
+              (context.status.toLowerCase() === "failure" ||
+                context.status.toLowerCase() === "failing")),
+        );
+      const firstFailureCheckURL =
+        firstFailureCheckNode?.targetUrl ?? firstFailureCheckNode?.url;
+
       notifier.notify({
         title: `${icon} ${pr.headRef} is ${latestStatus}`,
         message: `PR ${pr.number} for branch ${pr.headRef} is ${latestStatus}`,
         sound, // Defaults to false, or pass a sound name like 'Frog'
         wait: true, // wait for user action/click
-        open: checksData.data.repository.pullRequest.url,
+        open:
+          firstFailureCheckURL || checksData.data.repository.pullRequest.url,
       });
-      lastStatusByBranch.set(pr.headRef, latestStatus.toLowerCase());
+      lastStatusByBranch.set(pr.headRef, normalizeBuildStatus(latestStatus));
     }
   }
 }
 
 async function checkBuildkiteBuilds(headRefsToWatch: string[]) {
   for (const branch of headRefsToWatch) {
-    const builds = await fetch(
-      `https://api.buildkite.com/v2/builds?exclude_jobs=true&exclude_pipeline=true&branch=${branch}`,
-      {
-        headers: {
-          Authorization: `Bearer ${BUILDKITE_TOKEN}`,
+    let builds: Response;
+    try {
+      builds = await fetch(
+        `https://api.buildkite.com/v2/builds?exclude_jobs=true&exclude_pipeline=true&branch=${branch}`,
+        {
+          headers: {
+            Authorization: `Bearer ${BUILDKITE_TOKEN}`,
+          },
         },
-      },
-    );
+      );
+    } catch (error) {
+      console.error("Failed to fetch Buildkite builds", error);
+      return;
+    }
+
     const buildsData = await builds.json();
     //console.log(buildsData);
     const sortedBuilds = buildsData
@@ -139,7 +187,7 @@ async function checkBuildkiteBuilds(headRefsToWatch: string[]) {
 
     const lastStatus = lastStatusByBranch.get(branch);
     if (
-      latestBuild.state.toLowerCase() !== lastStatus &&
+      normalizeBuildStatus(latestBuild.state) !== lastStatus &&
       (latestBuild.state === "failing" || latestBuild.state === "failed")
     ) {
       console.log(`latest status for branch ${branch} is ${latestBuild.state}`);
@@ -160,7 +208,7 @@ async function checkBuildkiteBuilds(headRefsToWatch: string[]) {
         wait: true, // wait for user action/click
         open: latestBuild.web_url,
       });
-      lastStatusByBranch.set(branch, latestBuild.state.toLowerCase());
+      lastStatusByBranch.set(branch, normalizeBuildStatus(latestBuild.state));
     }
   }
 }
