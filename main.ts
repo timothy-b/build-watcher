@@ -1,4 +1,6 @@
 import notifier from "node-notifier";
+// @ts-ignore - Deno import map resolves this at runtime.
+import { delay } from "@std/async/delay";
 
 // Configure in .env
 const BUILDKITE_TOKEN = process.env.BUILDKITE_TOKEN;
@@ -24,7 +26,10 @@ async function main() {
     // TODO: implement variable polling interval
     // where succeeded branches get polled less frequently
     // to reduce rate-limit usage
-    await new Promise((resolve) => setTimeout(resolve, 10000));
+
+    // Use Deno.sleep instead of setTimeout to avoid breaking on wake from sleep.
+    // actually this doesn't seem to work either :/
+    await delay(10000);
   }
 }
 
@@ -82,6 +87,12 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
 
   for (const pr of prsToWatch) {
     let response: Response;
+    let checksData: Record<string, any>;
+
+    // Create a controller to manually abort the request if it hangs
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
     try {
       response = await fetch(`https://api.github.com/graphql`, {
         method: "POST",
@@ -98,13 +109,21 @@ async function checkPRs(prsToWatch: { headRef: string; number: number }[]) {
             prNumber: pr.number,
           },
         }),
+        signal: controller.signal,
       });
-    } catch (error) {
-      console.error("Failed to fetch PRs from GitHub", error);
-      return [];
-    }
 
-    const checksData = await response.json();
+      checksData = await response.json();
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError') {
+        console.warn('Network request timed out (likely due to system sleep).');
+      } else {
+        console.error("Failed to fetch PRs from GitHub", error);
+      }
+      return [];
+    } finally {
+      // Always clear the timeout promise to prevent memory leaks
+      clearTimeout(timeoutId);
+    }
 
     const responseHeaders = response.headers;
     const rateLimitHeaders = [...responseHeaders.entries()].filter(([key]) =>
@@ -242,6 +261,10 @@ const githubSearchPrQuery = {
 };
 
 async function getPRsToWatch(): Promise<{ headRef: string; number: number }[]> {
+  // Create a controller to manually abort the request if it hangs
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  
   try {
     const response = await fetch("https://api.github.com/graphql", {
       method: "POST",
@@ -251,6 +274,7 @@ async function getPRsToWatch(): Promise<{ headRef: string; number: number }[]> {
         "User-Agent": "Node-Fetch-GraphQL-Script", // GitHub requires a User-Agent header
       },
       body: JSON.stringify(githubSearchPrQuery),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -287,9 +311,15 @@ async function getPRsToWatch(): Promise<{ headRef: string; number: number }[]> {
       number: pr.number,
     }));
   } catch (error) {
-    console.error("Fetch operation failed:", error);
+    if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError') {
+      console.warn('Network request timed out (likely due to system sleep).');
+    } else {
+      console.error("Fetch operation failed:", error);
+    }
 
     return [];
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

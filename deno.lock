@@ -2,6 +2,8 @@
   "version": "5",
   "specifiers": {
     "jsr:@std/assert@1": "1.0.15",
+    "jsr:@std/async@^1.5.0": "1.5.0",
+    "jsr:@std/data-structures@^1.1.1": "1.1.2",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "npm:node-notifier@^10.0.1": "10.0.1"
   },
@@ -11,6 +13,15 @@
       "dependencies": [
         "jsr:@std/internal"
       ]
+    },
+    "@std/async@1.5.0": {
+      "integrity": "4c1f22d287a17ad7d8643b1952bc5a4d21e5d8b68dc8c20d8268eecc69096e82",
+      "dependencies": [
+        "jsr:@std/data-structures"
+      ]
+    },
+    "@std/data-structures@1.1.2": {
+      "integrity": "2471377c9e0051f9ec34e57d0ebd0ad133a5a889677446ec6ba9938e4e102918"
     },
     "@std/internal@1.0.12": {
       "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
@@ -67,7 +78,8 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@1",
-      "npm:node-notifier@^10.0.1"
+      "jsr:@std/async@^1.5.0",
+      "npm:node-notifier@11"
     ]
   }
 }
