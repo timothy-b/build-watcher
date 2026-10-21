@@ -1,4 +1,4 @@
-import notifier from "node-notifier";
+import { NotificationCenter } from 'node-notifier';
 // @ts-ignore - Deno import map resolves this at runtime.
 import { delay } from "@std/async/delay";
 
@@ -13,6 +13,12 @@ const BUILDKITE_PIPELINE_NAME = process.env.BUILDKITE_PIPELINE_NAME;
 console.log("running Buildkite watcher");
 
 const lastStatusByBranch = new Map<string, string>();
+
+// Use Brew version since node-notifier (v11.0.0) hasn't updated its bundled terminal-notifier
+// to run on Apple Silicon yet (v3.0.0).
+const notifier = new NotificationCenter({
+  customPath: "/opt/homebrew/bin/terminal-notifier"
+});
 
 async function main() {
   while (true) {
